@@ -88,6 +88,8 @@ cython_debug/
 !.vscode/extensions.json
 !.vscode/*.code-snippets
 !*.code-workspace
+*.vscode
+.vscode
 
 # Built Visual Studio Code Extensions
 *.vsix

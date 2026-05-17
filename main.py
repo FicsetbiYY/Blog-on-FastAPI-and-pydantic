@@ -1,108 +1,78 @@
-from fastapi import FastAPI
-from pydantic import BaseModel, ValidationError
-from fastapi.responses import HTMLResponse
-from typing import Final
-import json
-import sqlite3
+from fastapi import FastAPI, HTTPException, Depends
+from sqlmodel import Field, Session, SQLModel, create_engine, select
+from typing import Final, List
+from datetime import datetime
 
-app: Final = FastAPI()
-
-class Post(BaseModel):
+# 1. Define the Database Model
+class Post(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
     author: str
     title: str
     content: str
-    date_posted: str
-    
-    
+    date_posted: str = Field(default_factory=lambda: datetime.utcnow().strftime("%B %d, %Y"))
 
+# 2. Setup Database Connection
+sqlite_file_name = "database.db"
+sqlite_url = f"sqlite:///{sqlite_file_name}"
+# connect_args is needed for SQLite to work properly with multi-threaded FastAPI
+engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
 
-class PostsBD:
-    def __init__(self, db_name):
-        self.conn = sqlite3.connect(db_name, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self.create_table()
+def create_db_and_tables():
+    """Create database tables based on SQLModel schemas."""
+    SQLModel.metadata.create_all(engine)
 
-    def create_table(self):
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS posts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                author TEXT,
-                title TEXT,
-                content TEXT,
-                date TEXT
-            )
-        ''')
-        self.conn.commit()
+app: Final = FastAPI()
 
+# Create tables when the application starts
+@app.on_event("startup")
+def on_startup():
+    create_db_and_tables()
 
-    def add_post(self, author, title, content, date):
-        self.cursor.execute(
-            "INSERT INTO posts (author, title, content, date) VALUES (?, ?, ?, ?)",
-            (author, title, content, date)
-        )
-        self.conn.commit()
-        return self.cursor.lastrowid  # returns created post's id
-
-    def get_all_posts(self):
-        self.cursor.execute("SELECT id, author, title, content, date FROM posts")
-        return self.cursor.fetchall()
-
-    def get_post(self, post_id):
-        self.cursor.execute("SELECT id, author, title, content, date FROM posts WHERE id = ?", (post_id,))
-        return self.cursor.fetchone() # Returns tuple or None
-    
-    def remove_post(self, post_id):
-        self.cursor.execute("DELETE FROM posts WHERE id = ?", (post_id,))
-        self.conn.commit()
+# Dependency to get database session for each request
+def get_session():
+    with Session(engine) as session:
+        yield session
 
 
 
 
-db: Final = PostsBD('Allposts.db')
+# 3. FastAPI Endpoints
+
+@app.post("/posts", response_model=Post)
+def create_post(post: Post, session: Session = Depends(get_session)):
+    """Create a new post and save it to the database."""
+    session.add(post)
+    session.commit()
+    session.refresh(post) # Fetch the generated ID from the database
+    return post
 
 
 
+@app.get("/posts", response_model=List[Post])
+def get_posts(session: Session = Depends(get_session)):
+    """Retrieve all posts from the database."""
+    statement = select(Post)
+    posts = session.exec(statement).all()
+    return posts
 
 
 
-@app.get("/posts")  # Getting all posts
-def get_posts():
-    raw_posts = db.get_all_posts()
-    # List[tuple] into List[dict]
-    formatted_posts = []
-    for row in raw_posts:
-        formatted_posts.append({
-            "id": row[0],
-            "author": row[1],
-            "title": row[2],
-            "content": row[3],
-            "date_posted": row[4]
-        })
-    return formatted_posts
+@app.get("/posts/{post_id}", response_model=Post)
+def get_single_post(post_id: int, session: Session = Depends(get_session)):
+    """Retrieve a single post by its ID."""
+    post = session.get(Post, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return post
 
 
-@app.post("/posts") # Posting
-def create_post(post: Post):
-    # adding to our Database
-    new_id = db.add_post(post.author, post.title, post.content, post.date_posted)
-    
-    # returning response for client
-    return {
-        "id": new_id, 
-        "author": post.author, 
-        "title": post.title, 
-        "content": post.content, 
-        "date_posted": post.date_posted
-    }
 
-
-@app.delete("/posts/{post_id}") # Deleting the post
-def delete_post(post_id: int):
-    # Checking if there is a post
-    existing_post = db.get_post(post_id)
-    if not existing_post:
-        return {"error": "Post not found"}
-        
-    db.remove_post(post_id)
-    return {"message": f"Post {post_id} succesfully deleted"}
-
+@app.delete("/posts/{post_id}")
+def delete_post(post_id: int, session: Session = Depends(get_session)):
+    """Delete a specific post from the database."""
+    post = session.get(Post, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    session.delete(post)
+    session.commit()
+    return {"message": f"Post {post_id} successfully deleted"}
