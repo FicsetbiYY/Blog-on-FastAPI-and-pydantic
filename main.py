@@ -4,7 +4,7 @@ from typing import Final, List
 from datetime import datetime
 from PassLogic import verify_password,create_access_token,hash_password,engine,get_session
 from contextlib import asynccontextmanager
-from models import Post, User, UserCreate
+from models import Post, User, UserCreate, Userlogin
 
 
 
@@ -112,19 +112,22 @@ def register_user(user_in: UserCreate, session: Session = Depends(get_session)):
     return db_user
 
 
-@app.post('/login', response_model=UserCreate)
-def log_in(user_data: UserCreate, session: Session = Depends(get_session)):
+@app.post('/login')
+def log_in(user_data: Userlogin, session: Session = Depends(get_session)):
+    # 1. Достаем юзера из базы (модель User)
     statement = select(User).where(User.username == user_data.username)
     db_user = session.exec(statement).first()
     
     if not db_user:
-        raise HTTPException(status_code=400, detail="Incorrect username or password")    
+        raise HTTPException(status_code=400, detail="User not found")
+        
+    # 2. Сверяем пароль из UserLogin с хэшем из User
+    # verify_password(сырой_пароль, хэш_из_базы)
+    is_valid = verify_password(user_data.password, db_user.hashed_password)
     
-    verified_password = verify_password(user_data.password, db_user.hashed_password)
-    if not verified_password:
-        raise HTTPException(status_code=400, detail="Incorrect username or password")
-    
+    if not is_valid:
+        raise HTTPException(status_code=400, detail="Invalid password")
+        
+    # 3. Выдаем токен
     token = create_access_token(data={"sub": db_user.username})
-    
-    # Return the token to the client
     return {"access_token": token, "token_type": "bearer"}

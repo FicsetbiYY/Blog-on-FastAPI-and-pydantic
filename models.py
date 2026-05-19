@@ -19,3 +19,9 @@ class Post(SQLModel, table=True):
     title: str
     content: str
     date_posted: str = Field(default_factory=lambda: datetime.utcnow().strftime("%B %d, %Y"))
+
+
+class Userlogin(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    username: str
+    password: str

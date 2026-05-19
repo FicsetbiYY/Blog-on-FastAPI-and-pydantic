@@ -108,3 +108,5 @@ media/
 # My Project files
 Config.py
 test.txt
+.gitignore
+*.gitignore
