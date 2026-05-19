@@ -1,33 +1,24 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import Depends
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from typing import Final, List
-from passlib.context import CryptContext
-from Config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+# from passlib.context import CryptContext
+from Config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES # You have to put your own
 import jwt
 from datetime import datetime, timedelta
+import bcrypt
 
-app: Final = FastAPI()
 
-# Define the Database Model
-class User(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    username: str
-    hashed_password: str
 
-# Setup Database Connection
-sqlite_file_name: Final = "UsersJWT.db"
+
+# 2. Setup Database Connection
+sqlite_file_name = "database.db"
 sqlite_url: Final = f"sqlite:///{sqlite_file_name}"
+# connect_args is needed for SQLite to work properly with multi-threaded FastAPI
 engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
 
-def create_db_and_tables():
-    """Create database tables based on SQLModel schemas."""
-    SQLModel.metadata.create_all(engine)
-    
 
 
-@app.on_event("startup")
-def on_startup():
-    create_db_and_tables()
+
     
 def get_session():
     with Session(engine) as session:
@@ -35,36 +26,40 @@ def get_session():
         
         
         
-# Using bcrypt algorithm to setup password hashing configuration 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 def hash_password(password: str) -> str:
-    """Convert a plain password string into a secure hash."""
-    return pwd_context.hash(password)
+    """Securely hash a password using direct bcrypt library."""
+    # 1. Convert string to bytes
+    pwd_bytes = password.encode('utf-8')
+    
+    # 2. Manual check: bcrypt strictly forbids > 72 bytes
+    if len(pwd_bytes) > 72:
+        pwd_bytes = pwd_bytes[:72]
+        
+    # 3. Generate salt and hash
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(pwd_bytes, salt)
+    
+    # 4. Return as string to store in DB
+    return hashed.decode('utf-8')
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify if the plain password matches the stored hash."""
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-
-@app.post("/register", response_model=User)
-def register_user(user: User, session: Session = Depends(get_session)):
-    """Register a new user by hashing their password and saving them to the DB."""
-    secure_hash = hash_password(user.hashed_password)
+    """Verify plain password against the stored hash."""
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode('utf-8'), 
+            hashed_password.encode('utf-8')
+        )
+    except Exception:
+        return False
     
-    user.hashed_password = secure_hash
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-    return user
+
 
 
 def create_access_token(data: dict) -> str:
     """Generate a secure JWT token containing user data with an expiration time."""
     to_encode = data.copy()
     
-    # Calculate when the token expires (current time + 30 minutes)
+    # Calculate when the token expires 
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     

@@ -2,42 +2,32 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from typing import Final, List
 from datetime import datetime
-from PassLogic import verify_password, create_access_token, User
+from PassLogic import verify_password,create_access_token,hash_password,engine,get_session
+from contextlib import asynccontextmanager
+from models import Post, User, UserCreate
 
-# 1. Define the Database Model
-class Post(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    author: str
-    title: str
-    content: str
-    date_posted: str = Field(default_factory=lambda: datetime.utcnow().strftime("%B %d, %Y"))
 
-# 2. Setup Database Connection
-sqlite_file_name = "database.db"
-sqlite_url = f"sqlite:///{sqlite_file_name}"
-# connect_args is needed for SQLite to work properly with multi-threaded FastAPI
-engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
+
 
 def create_db_and_tables():
     """Create database tables based on SQLModel schemas."""
     SQLModel.metadata.create_all(engine)
 
-app: Final = FastAPI()
+
+
 
 # Create tables when the application starts
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # This code runs WHEN THE SERVER STARTS
     create_db_and_tables()
+    yield
+    # This code runs WHEN THE SERVER SHUTS DOWN (if needed)
 
-# Dependency to get database session for each request
-def get_session():
-    with Session(engine) as session:
-        yield session
+app: Final = FastAPI(lifespan=lifespan)
 
-class Userlogin(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    username: str
-    hashed_password: str
+
+
 
 
 
@@ -105,16 +95,32 @@ def update_post(post_id: int, updated_data: Post, session: Session = Depends(get
     return db_post
 
 
+# Accept UserCreate and return User
+@app.post("/register", ) #response_model=User)
+def register_user(user_in: UserCreate, session: Session = Depends(get_session)):
+    """Register a new user with checked password validation."""
+    secure_hash = hash_password(user_in.password)
+    
+    db_user = User(
+        username=user_in.username,
+        hashed_password=secure_hash
+    )
+    
+    session.add(db_user)
+    session.commit()
+    session.refresh(db_user)
+    return db_user
 
-@app.post('/login', response_model=Userlogin)
-def log_in(user_data: Userlogin, session: Session = Depends(get_session)):
+
+@app.post('/login', response_model=UserCreate)
+def log_in(user_data: UserCreate, session: Session = Depends(get_session)):
     statement = select(User).where(User.username == user_data.username)
     db_user = session.exec(statement).first()
     
     if not db_user:
         raise HTTPException(status_code=400, detail="Incorrect username or password")    
     
-    verified_password = verify_password(user_data.hashed_password, db_user.hashed_password)
+    verified_password = verify_password(user_data.password, db_user.hashed_password)
     if not verified_password:
         raise HTTPException(status_code=400, detail="Incorrect username or password")
     

@@ -5,7 +5,7 @@ from datetime import datetime
 # Define the Database Model
 class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    username: str
+    username: str = Field(unique=True) # No duplicate usernames
     hashed_password: str
     
 class UserCreate(SQLModel):
