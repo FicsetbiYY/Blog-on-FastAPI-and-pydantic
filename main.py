@@ -1,37 +1,27 @@
 from fastapi import FastAPI, HTTPException, Depends
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel import Field, Session, create_engine, select
 from typing import Final, List
 from datetime import datetime
-from PassLogic import verify_password,create_access_token,hash_password,engine,get_session
+from PassLogic import verify_password,create_access_token,hash_password,get_session, create_db_and_tables
 from contextlib import asynccontextmanager
 from models import Post, User, UserCreate, Userlogin
 
 
 
-
-def create_db_and_tables():
-    """Create database tables based on SQLModel schemas."""
-    SQLModel.metadata.create_all(engine)
-
-
-
-
-# Create tables when the application starts
+# Create tables on Startup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # This code runs WHEN THE SERVER STARTS
     create_db_and_tables()
     yield
-    # This code runs WHEN THE SERVER SHUTS DOWN (if needed)
+    # on Shutdown:
 
 app: Final = FastAPI(lifespan=lifespan)
 
 
 
 
-
-
-# 3. FastAPI Endpoints
+# FastAPI Endpoints
 
 @app.post("/posts", response_model=Post)
 def create_post(post: Post, session: Session = Depends(get_session)):
@@ -82,7 +72,7 @@ def update_post(post_id: int, updated_data: Post, session: Session = Depends(get
     if not db_post:
         raise HTTPException(status_code=404, detail="Post not found")
         
-    # Overwrite old database values with new data from the request
+    # Overwrite database values
     db_post.title = updated_data.title
     db_post.content = updated_data.content
     db_post.author = updated_data.author
@@ -91,7 +81,6 @@ def update_post(post_id: int, updated_data: Post, session: Session = Depends(get
     session.add(db_post)
     session.commit()
     session.refresh(db_post)
-    
     return db_post
 
 
@@ -114,20 +103,17 @@ def register_user(user_in: UserCreate, session: Session = Depends(get_session)):
 
 @app.post('/login')
 def log_in(user_data: Userlogin, session: Session = Depends(get_session)):
-    # 1. Достаем юзера из базы (модель User)
     statement = select(User).where(User.username == user_data.username)
     db_user = session.exec(statement).first()
     
     if not db_user:
         raise HTTPException(status_code=400, detail="User not found")
         
-    # 2. Сверяем пароль из UserLogin с хэшем из User
-    # verify_password(сырой_пароль, хэш_из_базы)
+    
     is_valid = verify_password(user_data.password, db_user.hashed_password)
     
     if not is_valid:
         raise HTTPException(status_code=400, detail="Invalid password")
         
-    # 3. Выдаем токен
     token = create_access_token(data={"sub": db_user.username})
     return {"access_token": token, "token_type": "bearer"}

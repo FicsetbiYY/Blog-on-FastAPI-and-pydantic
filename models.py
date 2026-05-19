@@ -1,4 +1,4 @@
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel import Field, SQLModel
 from datetime import datetime
 
 
@@ -10,7 +10,7 @@ class User(SQLModel, table=True):
     
 class UserCreate(SQLModel):
     username: str
-    password: str # Plain password
+    password: str 
     
     
 class Post(SQLModel, table=True):
