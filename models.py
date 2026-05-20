@@ -16,7 +16,6 @@ class UserCreate(SQLModel):
 class PostCreate(SQLModel):
     title: str
     content: str
-    author: str
     
     # What post contain:
 class Post(SQLModel, table=True):

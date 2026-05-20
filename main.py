@@ -2,10 +2,10 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlmodel import Field, Session, create_engine, select
 from typing import Final, List
 #from datetime import datetime
-from PassLogic import verify_password,create_access_token,hash_password,get_session, create_db_and_tables
+from PassLogic import verify_password,create_access_token,hash_password,get_session, create_db_and_tables, decode_access_token
 from contextlib import asynccontextmanager
 from models import Post, User, UserCreate, Userlogin, PostCreate
-
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 
 # Create tables on Startup
@@ -22,20 +22,37 @@ app: Final = FastAPI(lifespan=lifespan)
 
 
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+def get_current_user(token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    """Dependency to get the currently authenticated user."""
+    # token contains username so we get it
+    username = decode_access_token(token)
+    
+    # Searching for a user
+    user = session.exec(select(User).where(User.username == username)).first()
+    
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")  
+    return user
+
+
+
+
 # FastAPI Endpoints
 
 @app.post("/posts", response_model=Post)
-def create_post(post_in: PostCreate, session: Session = Depends(get_session)):
-    """Create a new post and save it to the database."""
-    db_post = Post(**post_in.model_dump())
-    
-    session.add(db_post)
+def create_post(
+    post_in: PostCreate, 
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user) 
+):
+    db_post = Post(**post_in.model_dump(), author=current_user.username)
     
     session.add(db_post)
     session.commit()
-    session.refresh(db_post) # Fetch the generated ID from the database
+    session.refresh(db_post)
     return db_post
-
 
 
 @app.get("/posts", response_model=List[Post])
@@ -120,18 +137,16 @@ def register_user(user_in: UserCreate, session: Session = Depends(get_session)):
 
 
 @app.post('/login')
-def log_in(user_data: Userlogin, session: Session = Depends(get_session)):
-    statement = select(User).where(User.username == user_data.username)
+def log_in(
+    form_data: OAuth2PasswordRequestForm = Depends(), 
+    session: Session = Depends(get_session)
+):
+    statement = select(User).where(User.username == form_data.username)
     db_user = session.exec(statement).first()
     
-    if not db_user:
-        raise HTTPException(status_code=400, detail="User not found")
-        
     
-    is_valid = verify_password(user_data.password, db_user.hashed_password)
-    
-    if not is_valid:
-        raise HTTPException(status_code=400, detail="Invalid password")
-        
+    if not db_user or not verify_password(form_data.password, db_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+
     token = create_access_token(data={"sub": db_user.username})
     return {"access_token": token, "token_type": "bearer"}
