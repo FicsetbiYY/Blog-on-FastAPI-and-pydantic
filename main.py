@@ -4,7 +4,7 @@ from typing import Final, List
 #from datetime import datetime
 from PassLogic import verify_password,create_access_token,hash_password,get_session, create_db_and_tables, decode_access_token
 from contextlib import asynccontextmanager
-from models import Post, User, UserCreate, Userlogin, PostCreate, PostUpdate
+from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 
@@ -47,7 +47,9 @@ def create_post(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user) 
 ):
-    db_post = Post(**post_in.model_dump(), author=current_user.username)
+    if current_user.id is None:
+        raise HTTPException(status_code=500, detail="User ID is missing")
+    db_post = Post(**post_in.model_dump(), owner_id=current_user.id)
     
     session.add(db_post)
     session.commit()
@@ -55,24 +57,26 @@ def create_post(
     return db_post
 
 
-@app.get("/posts", response_model=List[Post])
+@app.get("/posts", response_model=List[PostRead])
 def get_posts(
-    author: str | None = None,
+    author_name: str | None = None,
     limit: int = 5,
     session: Session = Depends(get_session)
 ):
     """Retrieve posts with optional filtering by author and limit."""
-    # Basic get('/posts')
+    # Basic @app.get('/posts')
     statement = select(Post)
     
     
-    if author:
-        statement = statement.where(Post.author == author)
-    statement = statement.limit(limit)
-    
-    # Execute and return
-    posts = session.exec(statement).all()
-    return posts
+    if author_name:
+        user = session.exec(select(User).where(User.username == author_name)).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="Author not found")
+        statement = statement.where(Post.owner_id == user.id)
+
+    results = session.exec(statement.limit(limit)).all()
+    return results
 
 
 
@@ -97,7 +101,8 @@ def delete_post(
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     
-    if post.author != current_user.username:
+    
+    if Post.owner_id != current_user.id:
         raise HTTPException(
             status_code=403, 
             detail="You are not the author of this post!"
@@ -154,7 +159,7 @@ def update_post(
     if not db_post:
         raise HTTPException(status_code=404, detail="Post not found")
     
-    if db_post.author != current_user.username:
+    if db_post.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Forbidden: You are not the author!")
 
     # exclude_unset=True means only one(title or content of the post) is required
