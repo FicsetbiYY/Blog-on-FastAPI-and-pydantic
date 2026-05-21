@@ -4,7 +4,7 @@ from typing import Final, List
 #from datetime import datetime
 from PassLogic import verify_password,create_access_token,hash_password,get_session, create_db_and_tables, decode_access_token
 from contextlib import asynccontextmanager
-from models import Post, User, UserCreate, Userlogin, PostCreate
+from models import Post, User, UserCreate, Userlogin, PostCreate, PostUpdate
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 
@@ -110,26 +110,6 @@ def delete_post(
 
 
 
-@app.put("/posts/{post_id}", response_model=Post)
-def update_post(post_id: int, updated_data: Post, session: Session = Depends(get_session)):
-    """Update an existing post in the database."""
-    # Fetch the post from the database by ID
-    db_post = session.get(Post, post_id)
-    if not db_post:
-        raise HTTPException(status_code=404, detail="Post not found")
-        
-    # Overwrite database values
-    db_post.title = updated_data.title
-    db_post.content = updated_data.content
-    db_post.author = updated_data.author
-    
-    # Save the updated object
-    session.add(db_post)
-    session.commit()
-    session.refresh(db_post)
-    return db_post
-
-
 # Accept UserCreate and return User
 @app.post("/register", ) #response_model=User)
 def register_user(user_in: UserCreate, session: Session = Depends(get_session)):
@@ -161,3 +141,29 @@ def log_in(
 
     token = create_access_token(data={"sub": db_user.username})
     return {"access_token": token, "token_type": "bearer"}
+
+
+@app.patch("/posts/{post_id}", response_model=Post)
+def update_post(
+    post_id: int, 
+    post_data: PostUpdate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    db_post = session.get(Post, post_id)
+    if not db_post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    if db_post.author != current_user.username:
+        raise HTTPException(status_code=403, detail="Forbidden: You are not the author!")
+
+    # exclude_unset=True means only one(title or content of the post) is required
+    update_dict = post_data.model_dump(exclude_unset=True)
+    
+    for key, value in update_dict.items():
+        setattr(db_post, key, value)
+
+    session.add(db_post)
+    session.commit()
+    session.refresh(db_post)
+    return db_post
