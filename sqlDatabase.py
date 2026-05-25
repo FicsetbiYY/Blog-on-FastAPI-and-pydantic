@@ -1,13 +1,22 @@
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import SQLModel
 from models import settings
-# connect_args is needed for SQLite (NOT PostgreSQL) to work properly with multi-threaded FastAPI
-engine = create_engine(settings.DATABASE_URL)
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
-def get_session():
-    with Session(engine) as session:
+# connect_args is needed for SQLite (NOT PostgreSQL) to work properly with multi-threaded FastAPI
+engine = create_async_engine(settings.DATABASE_URL, echo=True)
+
+async_session_factory = async_sessionmaker(
+    bind=engine, 
+    class_=AsyncSession, 
+    expire_on_commit=False
+)
+
+async def get_session():
+    async with async_session_factory() as session:
         yield session
            
         
-def create_db_and_tables():
+async def create_db_and_tables():
     """Create database tables based on SQLModel schemas."""
-    SQLModel.metadata.create_all(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)

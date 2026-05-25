@@ -3,7 +3,7 @@ from sqlmodel import Session, select
 from typing import Final, List
 #from datetime import datetime
 from PassLogic import verify_password,create_access_token,hash_password, decode_access_token
-from sqlDatabase import get_session, create_db_and_tables
+from sqlDatabase import get_session, create_db_and_tables, AsyncSession, engine
 from contextlib import asynccontextmanager
 from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -12,9 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 # lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_db_and_tables()    # On Startup
+    await create_db_and_tables()    # On Startup
+    print('Startup')
     yield
-    print('Shutdown')         # On Shutdown
+    await engine.dispose()          # On Shutdown
+    print('Shutdown')               
 
 
 app: Final = FastAPI(lifespan=lifespan)
@@ -39,14 +41,14 @@ app.add_middleware(
 
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+async def get_current_user(token: str = Depends(oauth2_scheme), session: AsyncSession = Depends(get_session)):
     """Dependency to get the currently authenticated user."""
     # token contains username so we get it
     username = decode_access_token(token)
     
     # Searching for a user
-    user = session.exec(select(User).where(User.username == username)).first()
-    
+    user_result = await session.execute(select(User).where(User.username == username))
+    user = user_result.scalars().first()
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")  
     return user
@@ -57,9 +59,9 @@ def get_current_user(token: str = Depends(oauth2_scheme), session: Session = Dep
 # FastAPI Endpoints
 
 @app.post("/posts", response_model=Post)
-def create_post(
+async def create_post(
     post_in: PostCreate, 
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user) 
 ):
     if current_user.id is None:
@@ -67,16 +69,16 @@ def create_post(
     db_post = Post(**post_in.model_dump(), owner_id=current_user.id)
     
     session.add(db_post)
-    session.commit()
-    session.refresh(db_post)
+    await session.commit()
+    await session.refresh(db_post)
     return db_post
 
 
 @app.get("/posts", response_model=List[PostRead])
-def get_posts(
+async def get_posts(
     author_name: str | None = None,
     limit: int = 5,
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     """Retrieve posts with optional filtering by author and limit."""
     # Basic @app.get('/posts')
@@ -84,19 +86,20 @@ def get_posts(
     
     
     if author_name:
-        user = session.exec(select(User).where(User.username == author_name)).first()
-        
+        user_result = await session.execute(select(User).where(User.username == author_name))
+        user = user_result.scalars().first()
         if not user:
             raise HTTPException(status_code=404, detail="Author not found")
         statement = statement.where(Post.owner_id == user.id)
 
-    results = session.exec(statement.limit(limit)).all()
-    return results
+    results = await session.execute(statement.limit(limit))
+    posts=results.scalars().all()
+    return posts
 
 
 
 @app.get("/posts/{post_id}", response_model=Post)
-def get_single_post(post_id: int, session: Session = Depends(get_session)):
+async def get_single_post(post_id: int, session: AsyncSession = Depends(get_session)):
     """Retrieve a single post by its ID."""
     post = session.get(Post, post_id)
     if not post:
@@ -106,13 +109,13 @@ def get_single_post(post_id: int, session: Session = Depends(get_session)):
 
 
 @app.delete("/posts/{post_id}")
-def delete_post(
+async def delete_post(
     post_id: int, 
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """Delete a specific post from the database."""
-    post = session.get(Post, post_id)
+    post = await session.get(Post, post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     
@@ -124,15 +127,15 @@ def delete_post(
         )
     
     
-    session.delete(post)
-    session.commit()
+    await session.delete(post)
+    await session.commit()
     return {"message": f"Post successfully deleted"}
 
 
 
 # Accept UserCreate and return User
 @app.post("/register", ) 
-def register_user(user_in: UserCreate, session: Session = Depends(get_session)):
+async def register_user(user_in: UserCreate, session: AsyncSession = Depends(get_session)):
     """Register a new user with checked password validation."""
     secure_hash = hash_password(user_in.password)
     
@@ -142,18 +145,19 @@ def register_user(user_in: UserCreate, session: Session = Depends(get_session)):
     )
     
     session.add(db_user)
-    session.commit()
-    session.refresh(db_user)
+    await session.commit()
+    await session.refresh(db_user)
     return db_user
 
 
 @app.post('/login')
-def log_in(
+async def log_in(
     form_data: OAuth2PasswordRequestForm = Depends(), 
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     statement = select(User).where(User.username == form_data.username)
-    db_user = session.exec(statement).first()
+    db_user_result = await session.execute(statement)
+    db_user = db_user_result.scalars().first()
     
     
     if not db_user or not verify_password(form_data.password, db_user.hashed_password):
@@ -164,13 +168,13 @@ def log_in(
 
 
 @app.patch("/posts/{post_id}", response_model=Post)
-def update_post(
+async def update_post(
     post_id: int, 
     post_data: PostUpdate,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    db_post = session.get(Post, post_id)
+    db_post = await session.get(Post, post_id)
     if not db_post:
         raise HTTPException(status_code=404, detail="Post not found")
     
@@ -184,6 +188,6 @@ def update_post(
         setattr(db_post, key, value)
 
     session.add(db_post)
-    session.commit()
-    session.refresh(db_post)
+    await session.commit()
+    await session.refresh(db_post)
     return db_post

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
         extra='ignore',
         case_sensitive=False
     )
-settings = Settings() 
+
 class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     username: str = Field(unique=True, index=True) # No duplicate usernames
@@ -58,3 +58,5 @@ class PostRead(SQLModel):
     created_at: datetime
     views: int
     owner: Optional["User"] = None
+    
+settings = Settings() 
