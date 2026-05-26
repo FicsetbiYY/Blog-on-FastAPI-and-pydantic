@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import joinedload
 
 # lifespan
 @asynccontextmanager
@@ -82,7 +83,7 @@ async def get_posts(
 ):
     """Retrieve posts with optional filtering by author and limit."""
     # Basic @app.get('/posts')
-    statement = select(Post)
+    statement = select(Post).options(joinedload(Post.owner)).limit(limit) # type: ignore
     
     
     if author_name:
@@ -98,10 +99,10 @@ async def get_posts(
 
 
 
-@app.get("/posts/{post_id}", response_model=Post)
+@app.get("/posts/{post_id}", response_model=PostRead)
 async def get_single_post(post_id: int, session: AsyncSession = Depends(get_session)):
     """Retrieve a single post by its ID."""
-    post = session.get(Post, post_id)
+    post = await session.get(Post, post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     return post
@@ -120,7 +121,7 @@ async def delete_post(
         raise HTTPException(status_code=404, detail="Post not found")
     
     
-    if Post.owner_id != current_user.id:
+    if post.owner_id != current_user.id:
         raise HTTPException(
             status_code=403, 
             detail="You are not the author of this post!"

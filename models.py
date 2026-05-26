@@ -50,13 +50,15 @@ class PostUpdate(SQLModel):
     title: Optional[str] = None
     content: Optional[str] = None
     
+class UserPublic(SQLModel):
+    id: int
+    username: str
+
 class PostRead(SQLModel):
     id: int
     title: str
     content: str
     owner_id: int
-    created_at: datetime
-    views: int
-    owner: Optional["User"] = None
-    
+    owner: UserPublic | None = None
+
 settings = Settings() 
