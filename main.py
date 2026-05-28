@@ -4,7 +4,7 @@ from typing import Final, List
 from PassLogic import verify_password,create_access_token,hash_password, decode_access_token
 from sqlDatabase import get_session, create_db_and_tables, AsyncSession, engine
 from contextlib import asynccontextmanager
-from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate, PostPatch
+from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate, PostPatch, UserPublic
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import joinedload
@@ -214,3 +214,19 @@ async def update_post(
     await session.commit()
     await session.refresh(db_post)
     return db_post
+
+
+@app.get("/users/{username}", response_model=UserPublic)
+async def get_user_profile(
+    search_username: str, 
+    session: AsyncSession = Depends(get_session)
+):
+    statement = select(User).where(User.username == search_username)
+    result = await session.execute(statement)
+    db_user = result.scalars().first()
+    
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return db_user
+
+

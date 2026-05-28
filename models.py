@@ -21,7 +21,7 @@ class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     username: str = Field(unique=True, index=True) # No duplicate usernames
     hashed_password: str
-    posts: list["Post"] = Relationship(back_populates="owner")
+    posts: list["Post"] = Relationship(back_populates="owner" , cascade_delete=True)
 class UserCreate(SQLModel):
     username: str
     password: str 
