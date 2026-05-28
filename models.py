@@ -41,7 +41,7 @@ class Post(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     owner: "User" = Relationship(back_populates="posts")
 
-class PostUpdate(SQLModel):
+class PostPatch(SQLModel):
     title: Optional[str] = None
     content: Optional[str] = None
     
@@ -55,5 +55,9 @@ class PostRead(SQLModel):
     content: str
     owner_id: int
     owner: UserPublic | None = None
+    
+class PostUpdate(SQLModel):
+    title: str = ''
+    content: str = ''
 
 settings = Settings() 

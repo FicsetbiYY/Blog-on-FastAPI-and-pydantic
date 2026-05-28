@@ -4,7 +4,7 @@ from typing import Final, List
 from PassLogic import verify_password,create_access_token,hash_password, decode_access_token
 from sqlDatabase import get_session, create_db_and_tables, AsyncSession, engine
 from contextlib import asynccontextmanager
-from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate
+from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate, PostPatch
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import joinedload
@@ -168,9 +168,9 @@ async def log_in(
 
 
 @app.patch("/posts/{post_id}", response_model=Post)
-async def update_post(
+async def patch_post(
     post_id: int, 
-    post_data: PostUpdate,
+    post_data: PostPatch,
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -184,6 +184,29 @@ async def update_post(
     # exclude_unset=True means only one(title or content of the post) is required
     update_dict = post_data.model_dump(exclude_unset=True)
     
+    for key, value in update_dict.items():
+        setattr(db_post, key, value)
+
+    session.add(db_post)
+    await session.commit()
+    await session.refresh(db_post)
+    return db_post
+
+
+@app.put("/posts/{post_id}", response_model=Post)
+async def update_post(
+    post_id: int, 
+    post_data: PostUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    db_post = await session.get(Post, post_id)
+    if not db_post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if db_post.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden: You are not the author!")
+
+    update_dict = post_data.model_dump()
     for key, value in update_dict.items():
         setattr(db_post, key, value)
 
