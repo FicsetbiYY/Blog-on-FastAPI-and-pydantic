@@ -4,10 +4,13 @@ from typing import Final, List
 from PassLogic import verify_password,create_access_token,hash_password, decode_access_token
 from sqlDatabase import get_session, create_db_and_tables, AsyncSession, engine
 from contextlib import asynccontextmanager
-from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate, PostPatch, UserPublic, UserPatch
+from models import Post, User, UserCreate, PostRead, PostCreate, PostUpdate, PostPatch, UserPublic, UserPatch, UserUpdate
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import joinedload
+import redis.asyncio as redis
+import json
+from fastapi.encoders import jsonable_encoder
 
 # lifespan
 @asynccontextmanager
@@ -18,9 +21,10 @@ async def lifespan(app: FastAPI):
     await engine.dispose()          # On Shutdown
     print('Shutdown')               
 
-
+redis_client: Final = redis.from_url("redis://localhost:6379", decode_responses=True)
 app: Final = FastAPI(lifespan=lifespan)
 oauth2_scheme: Final = OAuth2PasswordBearer(tokenUrl="login")
+
 origins: Final[list] = [
     "http://localhost",
     "http://localhost:3000", # Common React port
@@ -70,6 +74,10 @@ async def create_post(
     session.add(db_post)
     await session.commit()
     await session.refresh(db_post)
+    
+    keys_to_delete = await redis_client.keys("posts:*")
+    if keys_to_delete:
+        await redis_client.delete(*keys_to_delete)    
     return db_post
 
 
@@ -80,6 +88,11 @@ async def get_posts(
     session: AsyncSession = Depends(get_session)
 ):
     """Retrieve posts with optional filtering by author and limit."""
+    cache_key = f"posts:limit:{limit}:author:{author_name}"
+    
+    cached_data = await redis_client.get(f"post:{PostRead}")
+    if cached_data:
+        return json.loads(cached_data)
     statement = select(Post).options(joinedload(Post.owner)).limit(limit) # type: ignore
     
     
@@ -92,6 +105,7 @@ async def get_posts(
 
     results = await session.execute(statement.limit(limit))
     posts=results.scalars().all()
+    await redis_client.setex(cache_key, 300, json.dumps(jsonable_encoder(posts)))
     return posts
 
 
@@ -99,11 +113,15 @@ async def get_posts(
 @app.get("/posts/{post_id}", response_model=PostRead)
 async def get_single_post(post_id: int, session: AsyncSession = Depends(get_session)):
     """Retrieve a single post by its ID."""
+    cached_post = await redis_client.get(f"post:{post_id}")
+    if cached_post:
+        return json.loads(cached_post)
     statement = select(Post).where(Post.id == post_id).options(joinedload(Post.owner)) # type: ignore
     result = await session.execute(statement)
     post = result.scalars().first()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+    await redis_client.setex(f"post:{post_id}", 300, post.json())
     return post
 
 
@@ -184,13 +202,16 @@ async def patch_post(
 
     # exclude_unset=True means only one(title or content of the post) is required
     update_dict = post_data.model_dump(exclude_unset=True)
-    
     for key, value in update_dict.items():
         setattr(db_post, key, value)
 
     session.add(db_post)
     await session.commit()
     await session.refresh(db_post)
+    
+    keys_to_delete = await redis_client.keys("posts:*")
+    if keys_to_delete:
+        await redis_client.delete(*keys_to_delete)
     return db_post
 
 
@@ -215,6 +236,10 @@ async def update_post(
     session.add(db_post)
     await session.commit()
     await session.refresh(db_post)
+    keys_to_delete = await redis_client.keys("posts:*")
+    if keys_to_delete:
+        await redis_client.delete(*keys_to_delete)
+    
     return db_post
 
 
@@ -235,7 +260,7 @@ async def get_user_profile(
 
 
 @app.patch("/users/me", response_model=UserPublic)
-async def update_user_me(
+async def patch_user_me(
     user_data: UserPatch,
     session: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
@@ -259,3 +284,19 @@ async def delete_current_user(
     await session.delete(current_user)
     await session.commit()
     return None
+
+@app.put("/users/me", response_model=UserPublic)
+async def update_user_me(
+    user_data: UserUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    update_dict = user_data.model_dump()
+    for key, value in update_dict.items():
+        setattr(current_user, key, value)
+    
+    session.add(current_user)
+    await session.commit()
+    await session.refresh(current_user)
+    return current_user
+
