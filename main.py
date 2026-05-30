@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from sqlmodel import select
 from typing import Final, List
 from PassLogic import verify_password,create_access_token,hash_password, decode_access_token
@@ -47,6 +47,9 @@ app.add_middleware(
 
 async def get_current_user(token: str = Depends(oauth2_scheme), session: AsyncSession = Depends(get_session)):
     """Dependency to get the currently authenticated user."""
+    in_blacklist = await redis_client.get(f"blacklist:{token}")
+    if in_blacklist:
+        raise HTTPException(status_code=401, detail="Token has been revoked. Please log in again.")
     username = decode_access_token(token)
     
     # Searching for a user
@@ -61,7 +64,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), session: AsyncSe
 
 # FastAPI Endpoints
 
-@app.post("/posts", response_model=Post)
+@app.post("/posts", response_model=Post, tags=["Posts"])
 async def create_post(
     post_in: PostCreate, 
     session: AsyncSession = Depends(get_session),
@@ -249,12 +252,16 @@ async def get_user_profile(
     search_username: str, 
     session: AsyncSession = Depends(get_session)
 ):
+    cached_user = await redis_client.get(f"user:{search_username}")
+    if cached_user:
+        return json.loads(cached_user)
     statement = select(User).where(User.username == search_username)
     result = await session.execute(statement)
     db_user = result.scalars().first()
     
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
+    await redis_client.setex(f"user:{search_username}", 300, db_user.model_dump_json())
     return db_user
 
 
@@ -285,6 +292,8 @@ async def delete_current_user(
     await session.commit()
     return None
 
+
+
 @app.put("/users/me", response_model=UserPublic)
 async def update_user_me(
     user_data: UserUpdate,
@@ -300,3 +309,17 @@ async def update_user_me(
     await session.refresh(current_user)
     return current_user
 
+
+
+@app.post('/logout')
+async def log_out(
+    request: Request,
+    current_user: User = Depends(get_current_user)
+):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid token header")
+    token = auth_header.split(" ")[1]
+    
+    await redis_client.setex(f"blacklist:{token}", 1800, "true")
+    return {"detail": "Successfully logged out"}
