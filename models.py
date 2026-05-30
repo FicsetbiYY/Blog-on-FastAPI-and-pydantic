@@ -67,7 +67,7 @@ class PostUpdate(SQLModel):
 class UserPatch(SQLModel):
     username: Optional[str] = None
     description: Optional[str] = None
-    
+
 class UserUpdate(SQLModel):
     username: str
     description: str | None = None
